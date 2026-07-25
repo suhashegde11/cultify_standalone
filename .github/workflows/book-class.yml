@@ -34,4 +34,4 @@ jobs:
           WINDOW_END: '22:05:00'
           RETRY_INTERVAL_SECONDS: '1'
         run: bun run-booking-window.js
-
+# dummy comment
