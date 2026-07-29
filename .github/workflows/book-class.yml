@@ -2,7 +2,7 @@ name: Auto Book Cult Class
 
 on:
   schedule:
-    - cron: '24 04 * * *' # 4:24 PM UTC i.e 9:54 PM IST - starts 2 min before the booking window to allow for setup time
+    - cron: '24 16 * * *' # 4:24 PM UTC i.e 9:54 PM IST - starts 2 min before the booking window to allow for setup time
   workflow_dispatch:
 
 jobs:
