@@ -2,7 +2,7 @@ name: Auto Book Cult Class
 
 on:
   schedule:
-    - cron: '01 10 * * *' # 4:24 PM UTC i.e 9:54 PM IST - starts 2 min before the booking window to allow for setup time
+    - cron: '24 04 * * *' # 4:24 PM UTC i.e 9:54 PM IST - starts 2 min before the booking window to allow for setup time
   workflow_dispatch:
 
 jobs:
@@ -30,8 +30,8 @@ jobs:
           PREFERRED_SLOTS: ${{ secrets.PREFERRED_SLOTS }}
           PREFERRED_WORKOUT: ${{ secrets.PREFERRED_WORKOUT }}
           ENABLE_WAITLIST: ${{ secrets.ENABLE_WAITLIST }}
-          WINDOW_START: '15:32:15'
-          WINDOW_END: '15:42:00'
+          WINDOW_START: '21:58:15'
+          WINDOW_END: '22:05:00'
           RETRY_INTERVAL_SECONDS: '1'
         run: bun run-booking-window.js
 # dummy comment
