@@ -12,7 +12,8 @@ Cultify is an automation tool that books fitness classes at Cult.fit centers. It
 
 - Automatic class booking based on preferences
 - Configurable workout types, time slots, and centers
-- Smart booking logic (skips if already booked)
+- Explicit day-ahead targeting (`BOOKING_DAYS_AHEAD`, default 4) — computes today + N days directly instead of guessing from the API response, and keeps retrying until that date's slots actually open
+- Smart booking logic (skips if already booked, or already waitlisted, for the target date)
 - Waitlist support (joins queue when classes are full)
 - GitHub Actions integration for automated scheduling
 - Zero server costs (runs on GitHub infrastructure)
@@ -32,11 +33,13 @@ Cultify is an automation tool that books fitness classes at Cult.fit centers. It
 ## How It Works
 
 1. Extracts authentication from browser curl command (cookies path)
-2. Fetches available classes via Cult.fit API
-3. Filters by configured preferences (center, time, workout type)
-4. Checks for existing bookings on target date
-5. Books first available matching class according to the preference
-6. Logs results for monitoring
+2. Computes the target date as **today + `BOOKING_DAYS_AHEAD` days** (default 4) in your configured timezone
+3. Fetches available classes via Cult.fit API
+4. If the target date hasn't opened for booking yet, logs that and keeps retrying (via `run-booking-window.js`) instead of evaluating an earlier, already-booked day
+5. Checks for an existing booking or waitlist entry on the target date — stops immediately if either exists
+6. Filters by configured preferences (center, time, workout type)
+7. Books first available matching class according to the preference, or joins the shortest waitlist if none are available
+8. Logs results (workout + date) for monitoring
 
 ## Prerequisites
 
@@ -100,6 +103,7 @@ And the corresponding secret in Step 3:
 | `PREFERRED_SLOTS` | Comma-separated time slots | 07:00:00,08:00:00,09:00:00 | 18:00:00,19:00:00 |
 | `PREFERRED_WORKOUT` | Workout class name | HRX WORKOUT | DANCE FITNESS |
 | `ENABLE_WAITLIST` | Join waitlist when full | true | false |
+| `BOOKING_DAYS_AHEAD` | How many days ahead of today to target | 4 | 4 |
 
 **Part B: Enable GitHub Actions**
 
@@ -157,6 +161,21 @@ Complete curl command from browser. Must be provided as single line (remove back
 ```bash
 CURL_COMMAND=curl 'https://www.cult.fit/api/...' -H 'apikey: ...' -b '...' -H 'osname: browser'
 ```
+
+#### BOOKING_DAYS_AHEAD (Optional)
+
+How many days ahead of today (in your configured timezone) the script should target for booking.
+
+**Default:** 4
+
+**Example:**
+```bash
+BOOKING_DAYS_AHEAD=4
+```
+
+**Behavior:**
+
+The script always computes the target date as *today + `BOOKING_DAYS_AHEAD` days*, instead of assuming "whatever date the Cult.fit API currently lists last." If that date hasn't opened for booking yet, the script logs it and returns a non-terminal status so `run-booking-window.js` keeps retrying until the date actually appears — it won't report a false "already booked" based on an earlier day that was booked in a previous run.
 
 #### PREFERRED_CENTER (Optional)
 
@@ -256,6 +275,14 @@ Class booked successfully!
 
 If you get a spot from waitlist, Cult.fit will notify you via app/email.
 
+**Already Waitlisted:**
+
+If you're already on the waitlist for the target date (e.g. from a previous run), the script won't try booking or joining another slot's/workout's waitlist — it immediately reports the existing status and stops:
+
+```
+CULT ADIDAS STRENGTH+ already waitlisted for August 3rd, 2026. Skipping further booking attempts.
+```
+
 #### DEBUG (Optional)
 
 Enable detailed logging to debug booking issues.
@@ -319,25 +346,39 @@ WINDOW_START=09:00:00 WINDOW_END=09:00:30 RETRY_INTERVAL_SECONDS=5 node run-book
 
 When checking workflow logs in Actions tab, you'll see:
 
-**Available Class:**
+**Booked:**
 ```
-Found HRX WORKOUT class at 07:00:00 on 2025-11-26
-Class ID: 7360581
-Status: Available (2 seats)
-Class booked successfully!
+Booking for 2026-08-03
+Preferred slots for monday: 07:00:00, 08:00:00, 09:00:00
+Found HRX WORKOUT at 07:00:00 on 2026-08-03
+Booking (2 seats available)
+CULT HRX WORKOUT booked for August 3rd, 2026.
 ```
 
-**Waitlist:**
+**Waitlisted:**
 ```
-Found HRX WORKOUT class at 07:00:00 on 2025-11-26
-Class ID: 7360552
-Status: Waitlist (5 people waitlisted)
-Class booked successfully!
+Booking for 2026-08-03
+Preferred slots for monday: 07:00:00, 08:00:00, 09:00:00
+No HRX WORKOUT classes available on 2026-08-03
+Joining waitlist for ADIDAS STRENGTH+ at 08:00:00 (5 people ahead)
+CULT ADIDAS STRENGTH+ waitlisted for August 3rd, 2026.
 ```
 
 **Already Booked:**
 ```
-You already have a class booked on 2025-11-26. Skipping booking.
+Booking for 2026-08-03
+CULT HRX WORKOUT already booked for August 3rd, 2026.
+```
+
+**Already Waitlisted:**
+```
+Booking for 2026-08-03
+CULT ADIDAS STRENGTH+ already waitlisted for August 3rd, 2026. Skipping further booking attempts.
+```
+
+**Target Date Not Open Yet:**
+```
+2026-08-03 (day +4) is not open for booking yet.
 ```
 
 ## Local Testing (Optional)
@@ -453,10 +494,19 @@ No HRX classes available between 7-9 AM on 2025-11-26
 
 **Message:**
 ```
-You already have a class booked on 2025-11-26. Skipping booking.
+CULT HRX WORKOUT already booked for August 3rd, 2026.
 ```
 
-**Explanation:** Script detected existing booking for target date. This is expected behavior to prevent double booking.
+**Explanation:** Script detected an existing booking for the target date (today + `BOOKING_DAYS_AHEAD`). This is expected behavior to prevent double booking, and the retry loop stops.
+
+### Already Waitlisted
+
+**Message:**
+```
+CULT ADIDAS STRENGTH+ already waitlisted for August 3rd, 2026. Skipping further booking attempts.
+```
+
+**Explanation:** Script detected an existing waitlist entry for the target date. It won't try booking or waitlisting another slot/workout for the same day — this is expected behavior to avoid stacking multiple waitlist entries.
 
 ### Workflow Not Running
 
@@ -505,7 +555,9 @@ cultify/
 
 **index.js**
 - Defines workout types and preferences
+- Computes the explicit target date (today + `BOOKING_DAYS_AHEAD`, default 4) rather than assuming the API's last-listed day; returns a `NOT_OPEN_YET` status if that date isn't open yet
 - Fetches available classes
+- Skips booking/waitlist attempts entirely if already booked, or already waitlisted, for the target date
 - Filters by preferences
 - Handles booking logic
 - Exports `attemptBooking()` for reuse by `run-booking-window.js`; runs once immediately when executed directly
@@ -542,22 +594,29 @@ Find workout ID and name from API response in logs.
 Main booking flow in `index.js`:
 
 ```javascript
-async function main() {
+async function attemptBooking() {
     // 1. Fetch classes
     let classes = await makeAPICall(...);
-    
-    // 2. Check existing bookings
-    if (hasBookingForDate(...)) return;
-    
-    // 3. Try each time slot
-    for (let slot of PREFERRED_SLOTS) {
+
+    // 2. Compute the explicit target date (today + BOOKING_DAYS_AHEAD)
+    let date = getDateString(BOOKING_DAYS_AHEAD, config.timezone);
+    if (!classes.classByDateMap[date]) return 'NOT_OPEN_YET';
+
+    // 3. Check existing booking / waitlist status for that date
+    const { bookedClass, waitlistedClass } = findUserClassStatusForDate(...);
+    if (bookedClass) return 'ALREADY_BOOKED';
+    if (waitlistedClass) return 'WAITLISTED';
+
+    // 4. Try each time slot, in preference order
+    for (let slot of preferredSlotsForDay) {
         slots = getSlots(...);
         if (slots.length > 0) {
-            // 4. Book first match
+            // 5. Book first match
             await bookClass(slots[0].id);
-            break;
+            return 'BOOKED';
         }
     }
+    // ...falls through to joining a waitlist if ENABLE_WAITLIST is true
 }
 ```
 
@@ -629,6 +688,7 @@ When tokens expire, update CURL_COMMAND with fresh credentials.
 ## Limitations
 
 - Single booking per day (by design)
+- Targets a single fixed day offset from today (`BOOKING_DAYS_AHEAD`, default 4) per run — not per-run configurable without changing the env var
 - Requires valid Cult.fit membership
 - Dependent on Cult.fit API availability
 - Tokens require periodic refresh

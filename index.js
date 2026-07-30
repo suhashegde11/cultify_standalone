@@ -103,19 +103,46 @@ function getDateString(offsetDays, timezone) {
     return target.toISOString().slice(0, 10);
 }
 
-function hasBookingForDate(classesForDay) {
+function ordinalSuffix(day) {
+    if (day >= 11 && day <= 13) {
+        return 'th';
+    }
+    switch (day % 10) {
+        case 1: return 'st';
+        case 2: return 'nd';
+        case 3: return 'rd';
+        default: return 'th';
+    }
+}
+
+// Formats a YYYY-MM-DD date-id as e.g. "August 3rd, 2026" for status logging.
+function formatDateLong(dateStr) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const monthName = new Date(Date.UTC(year, month - 1, day))
+        .toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+    return `${monthName} ${day}${ordinalSuffix(day)}, ${year}`;
+}
+
+// Scans the target date's classes at the preferred center once, returning any
+// class the user is already booked into and/or already on the waitlist for.
+function findUserClassStatusForDate(classesForDay) {
+    let bookedClass = null;
+    let waitlistedClass = null;
     for (let timeSlot of classesForDay.classByTimeList) {
         for (let centerClass of timeSlot.centerWiseClasses) {
-            if (centerClass.centerId === PREFERRED_CENTER) {
-                for (let classs of centerClass.classes) {
-                    if (classs.state === 'BOOKED' || classs.isBooked === true) {
-                        return true;
-                    }
+            if (centerClass.centerId !== PREFERRED_CENTER) {
+                continue;
+            }
+            for (let classs of centerClass.classes) {
+                if (classs.state === 'BOOKED' || classs.isBooked === true) {
+                    bookedClass = classs;
+                } else if (classs.state === 'WAITLISTED' || classs.isWaitlisted === true) {
+                    waitlistedClass = classs;
                 }
             }
         }
     }
-    return false;
+    return { bookedClass, waitlistedClass };
 }
 
 // Returns a status describing the outcome, so a caller retrying across a time
@@ -134,9 +161,15 @@ async function attemptBooking() {
 
         console.log(`Booking for ${date}`);
 
-        if (hasBookingForDate(dayData)) {
-            console.log(`Already booked on ${date}. Skipping.`);
+        const { bookedClass, waitlistedClass } = findUserClassStatusForDate(dayData);
+        if (bookedClass) {
+            console.log(`CULT ${bookedClass.workoutName} already booked for ${formatDateLong(date)}.`);
             return 'ALREADY_BOOKED';
+        }
+        if (waitlistedClass) {
+            // Already on a waitlist for this date - don't join another slot's waitlist or book elsewhere.
+            console.log(`CULT ${waitlistedClass.workoutName} already waitlisted for ${formatDateLong(date)}. Skipping further booking attempts.`);
+            return 'WAITLISTED';
         }
 
         // Determine the day of the week (e.g., "monday", "tuesday")
@@ -165,7 +198,7 @@ async function attemptBooking() {
                     console.log(`Found ${classInfo.workoutName} at ${slot} on ${date}`);
                     console.log(`Booking (${classInfo.availableSeats} seats available)`);
                     await bookClass(classInfo.id);
-                    console.log("Class booked successfully!");
+                    console.log(`CULT ${classInfo.workoutName} booked for ${formatDateLong(date)}.`);
                     return 'BOOKED';
                 }
             }
@@ -205,7 +238,7 @@ async function attemptBooking() {
         let waitlistCount = (best.classInfo.waitlistInfo && best.classInfo.waitlistInfo.waitlistedUserCount) || 0;
         console.log(`Joining waitlist for ${best.classInfo.workoutName} at ${best.slot} (${waitlistCount} people ahead)`);
         await bookClass(best.classInfo.id);
-        console.log("Joined waitlist successfully!");
+        console.log(`CULT ${best.classInfo.workoutName} waitlisted for ${formatDateLong(date)}.`);
         return 'WAITLISTED';
     } catch (error) {
         errorHandler(error);
