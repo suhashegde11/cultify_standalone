@@ -2,7 +2,7 @@ name: Check Cult.fit Cookies
 
 on:
   schedule:
-    - cron: '25 7 * * *' # 3:30 AM UTC i.e 9:00 AM IST - daily cookie health check
+    - cron: '30 3 * * *' # 3:30 AM UTC i.e 9:00 AM IST - daily cookie health check
   workflow_dispatch:
 
 jobs:
