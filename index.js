@@ -74,6 +74,7 @@ const PREFERRED_SLOTS_CONFIG = config.preferredSlots || ['09:00:00'];
 const PREFERRED_CENTER = config.preferredCenter || 1515;
 const PREFERRED_WORKOUT_NAMES = config.preferredWorkout || ["HRX WORKOUT"];
 const ENABLE_WAITLIST = config.enableWaitlist !== false;
+const BOOKING_DAYS_AHEAD = parseInt(process.env.BOOKING_DAYS_AHEAD, 10) || 4;
 
 // Preference order follows PREFERRED_WORKOUT_NAMES, not the hardcoded ActivityType.preference values
 const PREFERRED_CLASSES_IN_ORDER = PREFERRED_WORKOUT_NAMES
@@ -82,6 +83,25 @@ const PREFERRED_CLASSES_IN_ORDER = PREFERRED_WORKOUT_NAMES
         return activity ? { ...activity, preference: index + 1 } : null;
     })
     .filter(Boolean);
+
+// Returns the YYYY-MM-DD string for "today + offsetDays" as seen in `timezone`,
+// matching the date-id format cult.fit uses in classes.classByDateMap.
+function getDateString(offsetDays, timezone) {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(now);
+    const y = parseInt(parts.find(p => p.type === 'year').value, 10);
+    const m = parseInt(parts.find(p => p.type === 'month').value, 10);
+    const d = parseInt(parts.find(p => p.type === 'day').value, 10);
+
+    const target = new Date(Date.UTC(y, m - 1, d));
+    target.setUTCDate(target.getUTCDate() + offsetDays);
+    return target.toISOString().slice(0, 10);
+}
 
 function hasBookingForDate(classesForDay) {
     for (let timeSlot of classesForDay.classByTimeList) {
@@ -99,15 +119,22 @@ function hasBookingForDate(classesForDay) {
 }
 
 // Returns a status describing the outcome, so a caller retrying across a time
-// window knows when to stop: 'BOOKED' | 'ALREADY_BOOKED' | 'WAITLISTED' | 'NO_MATCH' | 'ERROR'
+// window knows when to stop: 'BOOKED' | 'ALREADY_BOOKED' | 'WAITLISTED' | 'NOT_OPEN_YET' | 'NO_MATCH' | 'ERROR'
 async function attemptBooking() {
     try {
         let classes = await makeAPICall({}, CURE_FIT_HOST, URI.GET_CLASSES, HTTP_GET, commonHeaders);
-        let date = classes.days[classes.days.length - 1].id;
+        let date = getDateString(BOOKING_DAYS_AHEAD, config.timezone);
+
+        const dayData = classes.classByDateMap[date];
+        if (!dayData) {
+            // cult.fit hasn't opened this date's slots yet - not a failure, keep retrying.
+            console.log(`${date} (day +${BOOKING_DAYS_AHEAD}) is not open for booking yet.`);
+            return 'NOT_OPEN_YET';
+        }
 
         console.log(`Booking for ${date}`);
 
-        if (hasBookingForDate(classes.classByDateMap[date])) {
+        if (hasBookingForDate(dayData)) {
             console.log(`Already booked on ${date}. Skipping.`);
             return 'ALREADY_BOOKED';
         }
@@ -126,8 +153,6 @@ async function attemptBooking() {
         }
 
         console.log(`Preferred slots for ${dayOfWeek}: ${preferredSlotsForDay.join(', ')}`);
-
-        const dayData = classes.classByDateMap[date];
 
         // Pass 1: book the first open seat, trying preferred workouts in order
         // (all preferred slots are checked for a workout before moving to the next workout)
