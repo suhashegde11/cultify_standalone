@@ -8,6 +8,10 @@ const TIMEZONE = config.timezone || 'Asia/Kolkata';
 // instead of burning the rate-limit budget polling a still-closed endpoint.
 const WINDOW_START = process.env.WINDOW_START || '22:00:00';
 const WINDOW_END = process.env.WINDOW_END || '22:05:00';
+// Before this cutoff the +4 day slot isn't open yet, so a run is treated as a
+// status check: it attempts once and exits instead of waiting for WINDOW_START.
+// At/after the cutoff, the run waits for WINDOW_START to snipe the opening.
+const PRE_OPEN_CUTOFF = process.env.PRE_OPEN_CUTOFF || '21:00:00';
 const RETRY_INTERVAL_MS = (parseInt(process.env.RETRY_INTERVAL_SECONDS, 10) || 2) * 1000;
 
 // Backoff applied after cult.fit throttles us (429), its gateway errors (5xx),
@@ -50,12 +54,25 @@ function todayAt(timeStr, timezone) {
 }
 
 async function run() {
-    const firstAttemptAt = todayAt(WINDOW_START, TIMEZONE);
+    const openTime = todayAt(WINDOW_START, TIMEZONE);
+    const preOpenCutoff = todayAt(PRE_OPEN_CUTOFF, TIMEZONE);
     const windowEnd = todayAt(WINDOW_END, TIMEZONE);
 
-    console.log(`Booking window: ${WINDOW_START} - ${WINDOW_END} (${TIMEZONE})`);
+    console.log(`+4 day opens at ${WINDOW_START}; snipe window ${WINDOW_START} - ${WINDOW_END} (${TIMEZONE})`);
 
-    const untilStart = firstAttemptAt.getTime() - Date.now();
+    // Before the cutoff the +4 day slot isn't open yet, so this run is only a
+    // status check: attempt once (reports already-booked/waitlisted, or books it
+    // if it's somehow already open) and exit instead of sitting idle until 10PM.
+    if (Date.now() < preOpenCutoff.getTime()) {
+        console.log(`\n--- Status check at ${new Date().toISOString()} (before ${PRE_OPEN_CUTOFF} cutoff) ---`);
+        const status = await attemptBooking();
+        console.log(`Status check done (result: ${status}). Not waiting for the ${WINDOW_START} open.`);
+        return;
+    }
+
+    // At/after the cutoff we're here to snipe: wait for the exact open moment,
+    // then retry until the window closes.
+    const untilStart = openTime.getTime() - Date.now();
     if (untilStart > 0) {
         console.log(`Waiting ${Math.round(untilStart / 1000)}s for the ${WINDOW_START} open...`);
         await sleep(untilStart);
@@ -64,7 +81,7 @@ async function run() {
     let attempt = 0;
     let consecutiveBackoffs = 0;
 
-    while (Date.now() <= windowEnd.getTime()) {
+    while (true) {
         attempt++;
         console.log(`\n--- Attempt ${attempt} at ${new Date().toISOString()} ---`);
 
@@ -87,7 +104,7 @@ async function run() {
             delayMs = RETRY_INTERVAL_MS;
         }
 
-        // Don't sleep past the end of the window only to fire one more doomed attempt.
+        // Stop once the next attempt would fall outside the booking window.
         if (Date.now() + delayMs > windowEnd.getTime()) {
             break;
         }
