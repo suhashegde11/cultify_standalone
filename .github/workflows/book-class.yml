@@ -30,8 +30,8 @@ jobs:
           PREFERRED_SLOTS: ${{ secrets.PREFERRED_SLOTS }}
           PREFERRED_WORKOUT: ${{ secrets.PREFERRED_WORKOUT }}
           ENABLE_WAITLIST: ${{ secrets.ENABLE_WAITLIST }}
-          WINDOW_START: '21:58:15'
+          WINDOW_START: '22:00:00'
           WINDOW_END: '22:05:00'
-          RETRY_INTERVAL_SECONDS: '1'
+          RETRY_INTERVAL_SECONDS: '2'
         run: bun run-booking-window.js
 # dummy comment
