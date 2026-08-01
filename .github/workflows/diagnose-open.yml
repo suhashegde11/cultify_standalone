@@ -1,0 +1,44 @@
+name: Diagnose Slot Open (log only)
+
+# Manual-only. This never runs on a schedule, so it can't collide with or delay
+# the booking cron in book-class.yml. It runs diagnose-open.js, which only reads
+# the classes list and logs seat availability + GET latency - it never books.
+on:
+  workflow_dispatch:
+    inputs:
+      diag_start:
+        description: 'Start polling at HH:MM:SS IST (default: just before the 10 PM open)'
+        required: false
+        default: '21:59:30'
+      diag_end:
+        description: 'Stop polling at HH:MM:SS IST'
+        required: false
+        default: '22:01:00'
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run diagnostic (LOG ONLY - never books)
+        env:
+          CURL_COMMAND: ${{ secrets.CURL_COMMAND }}
+          COOKIES: ${{ secrets.COOKIES }}
+          PREFERRED_CENTER: ${{ secrets.PREFERRED_CENTER }}
+          PREFERRED_SLOTS: ${{ secrets.PREFERRED_SLOTS }}
+          PREFERRED_WORKOUT: ${{ secrets.PREFERRED_WORKOUT }}
+          DIAG_START: ${{ inputs.diag_start }}
+          DIAG_END: ${{ inputs.diag_end }}
+        run: bun diagnose-open.js
