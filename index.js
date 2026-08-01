@@ -147,15 +147,15 @@ function findUserClassStatusForDate(classesForDay) {
 
 // Returns a status describing the outcome, so a caller retrying across a time
 // window knows when to stop: 'BOOKED' | 'ALREADY_BOOKED' | 'WAITLISTED' | 'NOT_OPEN_YET' | 'NO_MATCH' | 'ERROR'
-async function attemptBooking() {
+async function attemptBooking(daysAhead = BOOKING_DAYS_AHEAD) {
     try {
         let classes = await makeAPICall({}, CURE_FIT_HOST, URI.GET_CLASSES, HTTP_GET, commonHeaders);
-        let date = getDateString(BOOKING_DAYS_AHEAD, config.timezone);
+        let date = getDateString(daysAhead, config.timezone);
 
         const dayData = classes.classByDateMap[date];
         if (!dayData) {
             // cult.fit hasn't opened this date's slots yet - not a failure, keep retrying.
-            console.log(`${date} (day +${BOOKING_DAYS_AHEAD}) is not open for booking yet.`);
+            console.log(`${date} (day +${daysAhead}) is not open for booking yet.`);
             return 'NOT_OPEN_YET';
         }
 
@@ -250,7 +250,7 @@ if (require.main === module) {
     attemptBooking();
 }
 
-module.exports = { attemptBooking, makeAPICall, commonHeaders, CURE_FIT_HOST, GET_CLASSES_URI: URI.GET_CLASSES };
+module.exports = { attemptBooking, BOOKING_DAYS_AHEAD, makeAPICall, commonHeaders, CURE_FIT_HOST, GET_CLASSES_URI: URI.GET_CLASSES };
 
 
 async function bookClass(activityID) {

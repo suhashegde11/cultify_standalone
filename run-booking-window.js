@@ -1,6 +1,6 @@
 "use strict";
 const config = require('./config');
-const { attemptBooking } = require('./index');
+const { attemptBooking, BOOKING_DAYS_AHEAD } = require('./index');
 
 const TIMEZONE = config.timezone || 'Asia/Kolkata';
 // The first booking check fires exactly at this time. Set it to the slot-open
@@ -19,6 +19,9 @@ const RETRY_INTERVAL_MS = (parseInt(process.env.RETRY_INTERVAL_SECONDS, 10) || 2
 // just keeps us flagged. Grows exponentially per consecutive failure, capped.
 const BACKOFF_BASE_MS = (parseInt(process.env.BACKOFF_BASE_SECONDS, 10) || 3) * 1000;
 const BACKOFF_MAX_MS = (parseInt(process.env.BACKOFF_MAX_SECONDS, 10) || 30) * 1000;
+// How many times the pre-open (+3) check/book retries on transient errors
+// (429/5xx/timeouts) before giving up, so a hiccup doesn't skip the booking.
+const PRE_OPEN_MAX_RETRIES = parseInt(process.env.PRE_OPEN_MAX_RETRIES, 10) || 5;
 
 // Booking should stop retrying for the day once one of these outcomes is reached.
 const TERMINAL_STATUSES = ['BOOKED', 'ALREADY_BOOKED', 'WAITLISTED'];
@@ -60,14 +63,35 @@ async function run() {
 
     console.log(`+4 day opens at ${WINDOW_START}; snipe window ${WINDOW_START} - ${WINDOW_END} (${TIMEZONE})`);
 
-    // Before the cutoff the +4 day slot isn't open yet, so this run is only a
-    // status check: attempt once (reports already-booked/waitlisted, or books it
-    // if it's somehow already open) and exit instead of sitting idle until 10PM.
+    // Before the cutoff, tonight's +4 day (which opens at WINDOW_START) isn't
+    // available yet - so act on the latest date that IS currently open: one day
+    // nearer (+3). attemptBooking books it when there's an open seat and we're not
+    // already booked/waitlisted (else it reports the existing status / waitlists).
+    // We only retry on transient errors so a 429/timeout can't skip the booking;
+    // any real outcome (booked/waitlisted/no-match) ends the run without idle waiting.
     if (Date.now() < preOpenCutoff.getTime()) {
-        console.log(`\n--- Status check at ${new Date().toISOString()} (before ${PRE_OPEN_CUTOFF} cutoff) ---`);
-        const status = await attemptBooking();
-        console.log(`Status check done (result: ${status}). Not waiting for the ${WINDOW_START} open.`);
-        return;
+        const bookDaysAhead = BOOKING_DAYS_AHEAD - 1;
+        console.log(`\n--- Pre-open check/book (before ${PRE_OPEN_CUTOFF} cutoff, latest open day +${bookDaysAhead}) ---`);
+
+        let transientFailures = 0;
+        while (true) {
+            console.log(`\n--- Attempt at ${new Date().toISOString()} ---`);
+            const status = await attemptBooking(bookDaysAhead);
+
+            if (!BACKOFF_STATUSES.includes(status)) {
+                console.log(`Pre-open check/book done (result: ${status}). Not waiting for the ${WINDOW_START} open.`);
+                return;
+            }
+
+            transientFailures++;
+            if (transientFailures > PRE_OPEN_MAX_RETRIES) {
+                console.log(`Giving up pre-open check/book after ${transientFailures - 1} transient failures (last: ${status}).`);
+                return;
+            }
+            const delayMs = Math.min(BACKOFF_BASE_MS * 2 ** (transientFailures - 1), BACKOFF_MAX_MS);
+            console.log(`Backing off ${Math.round(delayMs / 1000)}s after ${status} (${transientFailures}/${PRE_OPEN_MAX_RETRIES}).`);
+            await sleep(delayMs);
+        }
     }
 
     // At/after the cutoff we're here to snipe: wait for the exact open moment,
