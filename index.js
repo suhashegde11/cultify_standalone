@@ -242,7 +242,7 @@ async function attemptBooking() {
         return 'WAITLISTED';
     } catch (error) {
         errorHandler(error);
-        return 'ERROR';
+        return classifyError(error);
     }
 }
 
@@ -280,7 +280,15 @@ async function makeAPICall(request, host, path, method, headers) {
 
     if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(errorText || `HTTP ${response.status}`);
+        // Attach the status (and Retry-After, if the gateway sent one) so the
+        // retry loop can tell a 429/5xx apart from a genuine failure and back off.
+        const error = new Error(errorText || `HTTP ${response.status}`);
+        error.status = response.status;
+        const retryAfter = response.headers.get('retry-after');
+        if (retryAfter) {
+            error.retryAfter = Number(retryAfter);
+        }
+        throw error;
     }
 
     const contentType = response.headers.get('content-type');
@@ -329,4 +337,24 @@ function getSlots(classesForDay, slot, classTypes, allowedStates) {
 
 function errorHandler(error) {
     console.error("Booking failed:", error);
+}
+
+// Maps a thrown request error to a retry category the booking-window loop uses
+// to decide between a normal short retry and a longer backoff:
+// 'RATE_LIMITED' | 'SERVER_ERROR' | 'NETWORK_ERROR' | 'ERROR'
+function classifyError(error) {
+    if (error && error.status === 429) {
+        return 'RATE_LIMITED';
+    }
+    if (error && typeof error.status === 'number' && error.status >= 500) {
+        // cult.fit's gateway returns 5xx ("no healthy upstream", "upstream
+        // connect error") when it's overloaded at slot-open time.
+        return 'SERVER_ERROR';
+    }
+    // AbortSignal.timeout throws a TimeoutError DOMException; fetch network
+    // failures throw a TypeError. Both are transient and worth backing off on.
+    if (error && (error.name === 'TimeoutError' || error.name === 'TypeError')) {
+        return 'NETWORK_ERROR';
+    }
+    return 'ERROR';
 }
