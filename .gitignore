@@ -7,3 +7,5 @@ config.local.js
 bun.lockb
 package-lock.json
 classes.json
+local-ui/
+*.command
